@@ -1,6 +1,6 @@
 # Input Tool for Clanker
 
-Platform-specific input dialog for getting user input in Clanker.
+Platform-specific input dialogs for getting user input in Clanker. Supports text, password, dropdown selection, and chained questions for multiple inputs.
 
 ## Installation
 
@@ -26,10 +26,15 @@ clanker -p "use input to ask for an API key with password masking"
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| prompt | string | Yes | - | The prompt/question to show to the user |
+| prompt | string | No* | - | The prompt/question to show to the user (single question) |
 | default_value | string | No | - | Default value to pre-fill in the input field |
 | title | string | No | Input Required | Title for the dialog window |
 | password | boolean | No | false | Whether to mask the input for password entry |
+| type | string | No | text | Type of input: text, password, or dropdown |
+| options | array | No | - | List of options for dropdown selection |
+| questions | array | No* | - | Array of question objects for chained inputs |
+
+*Either `prompt` or `questions` is required.
 
 ## Examples
 
@@ -66,6 +71,41 @@ Expected output:
 User input: user@example.com
 ```
 
+### Example 4: Dropdown Selection
+
+```bash
+clanker -p "use input to select a color from dropdown with options ['Red', 'Green', 'Blue']"
+```
+
+Expected output:
+```
+User selects: Blue
+```
+
+### Example 5: Chained Questions
+
+```bash
+clanker -p "use input to ask multiple questions: name, email, and password"
+```
+
+The AI will format this as:
+```json
+{
+  "questions": [
+    {"prompt": "What is your name?", "title": "Name"},
+    {"prompt": "What is your email?", "title": "Email"},
+    {"prompt": "Enter your password:", "title": "Password", "type": "password"}
+  ]
+}
+```
+
+Expected output:
+```
+name: John Doe
+email: john@example.com
+password: [HIDDEN]
+```
+
 ## Platform Support
 
 The input tool uses platform-specific dialogs:
@@ -76,6 +116,19 @@ The input tool uses platform-specific dialogs:
   - Tries zenity (GNOME) first
   - Falls back to kdialog (KDE)
   - Falls back to terminal input if neither is available
+
+## Chained Questions
+
+The `questions` parameter allows asking multiple questions in sequence. Each question object can have:
+
+- `prompt` (required): The question to ask
+- `title` (optional): Dialog title
+- `default_value` (optional): Default value
+- `type` (optional): Input type (text, password, dropdown)
+- `password` (optional): Alternative to type="password"
+- `options` (optional): Array for dropdown selections
+
+Answers are returned as an object with automatically generated keys based on the prompts.
 
 ## Capabilities
 
@@ -89,6 +142,9 @@ This tool requires the following capabilities:
 - **Default values**: Pre-fill input fields with suggested values
 - **Cancel detection**: Properly handles when user cancels the dialog
 - **Fallback support**: Terminal input fallback for Linux systems without GUI dialogs
+- **Dropdown selection**: Choose from a list of predefined options
+- **Chained questions**: Ask multiple questions in sequence with one tool call
+- **Smart key generation**: Automatically generates meaningful keys from prompts
 
 ## Development
 

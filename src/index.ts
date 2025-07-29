@@ -15,13 +15,13 @@ const execAsync = promisify(child_process.exec);
 export default createTool()
     .id('input')
     .name('Get User Input')
-    .description('Show a platform-specific input dialog to get arbitrary information from the user with support for text, password, and dropdown selection')
+    .description('Show platform-specific input dialogs to get information from the user. Supports text, password, dropdown selection, and chained questions for multiple inputs.')
     .category(ToolCategory.Utility)
     .capabilities(ToolCapability.UserConfirmation)
     .tags('input', 'dialog', 'user', 'prompt', 'ask', 'dropdown', 'select', 'choice')
 
     // Arguments
-    .stringArg('prompt', 'The prompt/question to show to the user', {required: true})
+    .stringArg('prompt', 'The prompt/question to show to the user (single question)', {required: false})
     .stringArg('default_value', 'Default value to pre-fill in the input field (optional)', {required: false})
     .stringArg('title', 'Title for the dialog window (optional)', {required: false, default: 'Input Required'})
     .booleanArg('password', 'Whether to mask the input for password entry (optional)', {
@@ -33,6 +33,7 @@ export default createTool()
         required: false,
         default: 'text'
     })
+    .arrayArg('questions', 'Array of question objects for chained inputs', {required: false})
 
     // Examples
     .examples([
@@ -84,19 +85,63 @@ export default createTool()
                 options: ['Rachel', 'Clyde', 'Domi', 'Dave', 'Fin', 'Bella', 'Antoni', 'Thomas']
             },
             result: 'User selects: Rachel'
+        },
+        {
+            description: 'Chain multiple questions',
+            arguments: {
+                questions: [
+                    {prompt: 'What is your name?', title: 'Name'},
+                    {prompt: 'What is your email?', title: 'Email'},
+                    {prompt: 'Enter your password:', title: 'Password', type: 'password'}
+                ]
+            },
+            result: 'Returns object with all answers: {name: "John", email: "john@example.com", password: "[HIDDEN]"}'
+        },
+        {
+            description: 'Story creation with multiple inputs',
+            arguments: {
+                questions: [
+                    {prompt: 'What is the name of the main character?', title: 'Character Name'},
+                    {prompt: 'What is the setting of the story?', title: 'Story Setting'},
+                    {prompt: 'What is the main conflict?', title: 'Main Conflict'},
+                    {prompt: 'What is a key object in the story?', title: 'Key Object'}
+                ]
+            },
+            result: 'Returns object with all story elements'
         }
     ])
     
     // Execute
     .execute(async (args, context) => {
-        const {prompt, default_value, title, password, options, type} = args as {
-            prompt: string;
+        const {prompt, default_value, title, password, options, type, questions} = args as {
+            prompt?: string;
             default_value?: string;
             title?: string;
             password?: boolean;
             options?: string[];
             type?: string;
+            questions?: Array<{
+                prompt: string;
+                title?: string;
+                default_value?: string;
+                type?: string;
+                password?: boolean;
+                options?: string[];
+            }>;
         };
+
+        // Handle chained questions
+        if (questions && questions.length > 0) {
+            return await handleChainedQuestions(questions, context);
+        }
+
+        // Validate single question
+        if (!prompt) {
+            return {
+                success: false,
+                error: 'Either "prompt" or "questions" parameter is required'
+            };
+        }
 
         const platform = os.platform();
         context.logger?.debug(`Showing input dialog on ${platform}`);
@@ -154,7 +199,7 @@ export default createTool()
                 };
             }
 
-            context.logger?.info(`User provided input: ${password ? '[HIDDEN]' : result}`);
+            context.logger?.info(`User provided input: ${inputType === 'password' ? '[HIDDEN]' : result}`);
             return {
                 success: true,
                 output: result,
@@ -548,4 +593,143 @@ async function showTerminalDropdown(prompt: string, options: string[], defaultVa
     } catch (error) {
         throw new Error('Failed to read selection from terminal');
     }
+}
+
+/**
+ * Handle chained questions - ask multiple questions in sequence
+ */
+async function handleChainedQuestions(questions: Array<any>, context: any): Promise<any> {
+    const answers: Record<string, string> = {};
+    const platform = os.platform();
+    
+    context.logger?.info(`Processing ${questions.length} chained questions`);
+    
+    for (let i = 0; i < questions.length; i++) {
+        const question = questions[i];
+        const {
+            prompt,
+            title = `Question ${i + 1} of ${questions.length}`,
+            default_value,
+            type = 'text',
+            password = false,
+            options
+        } = question;
+        
+        if (!prompt) {
+            return {
+                success: false,
+                error: `Question ${i + 1} is missing required "prompt" field`
+            };
+        }
+        
+        // Determine the actual input type
+        const inputType = type || (password ? 'password' : 'text');
+        
+        // Validate dropdown options
+        if (inputType === 'dropdown' && (!options || options.length === 0)) {
+            return {
+                success: false,
+                error: `Question ${i + 1}: Dropdown type requires options array`
+            };
+        }
+        
+        try {
+            let result: string;
+            
+            switch (platform) {
+                case 'darwin': // macOS
+                    if (inputType === 'dropdown' && options) {
+                        result = await showMacOSDropdown(prompt, options, default_value, title);
+                    } else {
+                        result = await showMacOSDialog(prompt, default_value, title, inputType === 'password');
+                    }
+                    break;
+                    
+                case 'win32': // Windows
+                    if (inputType === 'dropdown' && options) {
+                        result = await showWindowsDropdown(prompt, options, default_value, title);
+                    } else {
+                        result = await showWindowsDialog(prompt, default_value, title, inputType === 'password');
+                    }
+                    break;
+                    
+                case 'linux': // Linux
+                    if (inputType === 'dropdown' && options) {
+                        result = await showLinuxDropdown(prompt, options, default_value, title);
+                    } else {
+                        result = await showLinuxDialog(prompt, default_value, title, inputType === 'password');
+                    }
+                    break;
+                    
+                default:
+                    return {
+                        success: false,
+                        error: `Unsupported platform: ${platform}`
+                    };
+            }
+            
+            // Generate a key for the answer
+            const key = generateAnswerKey(prompt, i);
+            answers[key] = result;
+            
+            context.logger?.info(`Question ${i + 1}: ${inputType === 'password' ? '[HIDDEN]' : result}`);
+            
+        } catch (error) {
+            if (error instanceof Error && error.message.includes('cancelled')) {
+                return {
+                    success: false,
+                    error: `User cancelled at question ${i + 1}`,
+                    data: {answeredQuestions: i, partialAnswers: answers}
+                };
+            }
+            throw error;
+        }
+    }
+    
+    // Return all answers as both a formatted string and structured data
+    const formattedOutput = Object.entries(answers)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join('\n');
+    
+    return {
+        success: true,
+        output: formattedOutput,
+        data: {
+            answers,
+            questionCount: questions.length
+        }
+    };
+}
+
+/**
+ * Generate a key for the answer based on the prompt
+ */
+function generateAnswerKey(prompt: string, index: number): string {
+    // Try to extract a meaningful key from the prompt
+    // Look for patterns like "What is your/the X?" or "Enter your X:"
+    const patterns = [
+        /what is (?:your |the )?(\w+)/i,
+        /enter (?:your |the )?(\w+)/i,
+        /choose (?:your |a )?(\w+)/i,
+        /select (?:your |a )?(\w+)/i,
+        /provide (?:your |the )?(\w+)/i,
+        /(\w+):/i,
+        /(\w+)\?/i
+    ];
+    
+    for (const pattern of patterns) {
+        const match = prompt.match(pattern);
+        if (match && match[1]) {
+            return match[1].toLowerCase();
+        }
+    }
+    
+    // Fallback: use first significant word or index
+    const words = prompt.toLowerCase().split(/\s+/);
+    const significantWord = words.find(w => 
+        w.length > 3 && 
+        !['what', 'enter', 'your', 'the', 'please', 'choose', 'select'].includes(w)
+    );
+    
+    return significantWord || `answer${index + 1}`;
 }
