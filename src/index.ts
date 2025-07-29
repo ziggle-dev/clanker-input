@@ -15,10 +15,10 @@ const execAsync = promisify(child_process.exec);
 export default createTool()
     .id('input')
     .name('Get User Input')
-    .description('Show a platform-specific input dialog to get arbitrary information from the user')
+    .description('Show a platform-specific input dialog to get arbitrary information from the user with support for text, password, and dropdown selection')
     .category(ToolCategory.Utility)
     .capabilities(ToolCapability.UserConfirmation)
-    .tags('input', 'dialog', 'user', 'prompt', 'ask')
+    .tags('input', 'dialog', 'user', 'prompt', 'ask', 'dropdown', 'select', 'choice')
 
     // Arguments
     .stringArg('prompt', 'The prompt/question to show to the user', {required: true})
@@ -28,6 +28,11 @@ export default createTool()
         required: false,
         default: false
     })
+    .stringArrayArg('options', 'List of options for dropdown selection (optional)', {required: false})
+    .stringArg('type', 'Type of input: text, password, or dropdown (optional)', {
+        required: false,
+        default: 'text'
+    })
 
     // Examples
     .examples([
@@ -35,7 +40,8 @@ export default createTool()
             description: 'Ask for user\'s name',
             arguments: {
                 prompt: 'What is your name?',
-                title: 'Name Input'
+                title: 'Name Input',
+                type: 'text'
             },
             result: 'User enters: John Doe'
         },
@@ -44,38 +50,94 @@ export default createTool()
             arguments: {
                 prompt: 'Please enter your API key:',
                 title: 'API Key',
-                password: true
+                type: 'password'
             },
             result: 'User enters masked input'
+        },
+        {
+            description: 'Select from dropdown options',
+            arguments: {
+                prompt: 'Choose your favorite color:',
+                title: 'Color Selection',
+                type: 'dropdown',
+                options: ['Red', 'Green', 'Blue', 'Yellow']
+            },
+            result: 'User selects: Blue'
+        },
+        {
+            description: 'Select AI model from dropdown',
+            arguments: {
+                prompt: 'Select the AI model to use:',
+                title: 'Model Selection',
+                type: 'dropdown',
+                options: ['eleven_turbo_v2_5', 'eleven_turbo_v2', 'eleven_multilingual_v2', 'eleven_monolingual_v1'],
+                default_value: 'eleven_turbo_v2_5'
+            },
+            result: 'User selects: eleven_turbo_v2_5'
+        },
+        {
+            description: 'Select voice from dropdown',
+            arguments: {
+                prompt: 'Choose a voice:',
+                title: 'Voice Selection',
+                type: 'dropdown',
+                options: ['Rachel', 'Clyde', 'Domi', 'Dave', 'Fin', 'Bella', 'Antoni', 'Thomas']
+            },
+            result: 'User selects: Rachel'
         }
     ])
     
     // Execute
     .execute(async (args, context) => {
-        const {prompt, default_value, title, password} = args as {
+        const {prompt, default_value, title, password, options, type} = args as {
             prompt: string;
             default_value?: string;
             title?: string;
             password?: boolean;
+            options?: string[];
+            type?: string;
         };
 
         const platform = os.platform();
         context.logger?.debug(`Showing input dialog on ${platform}`);
+
+        // Determine the actual input type
+        const inputType = type || (password ? 'password' : 'text');
+        
+        // Validate dropdown options
+        if (inputType === 'dropdown' && (!options || options.length === 0)) {
+            return {
+                success: false,
+                error: 'Dropdown type requires options array'
+            };
+        }
 
         try {
             let result: string;
 
             switch (platform) {
                 case 'darwin': // macOS
-                    result = await showMacOSDialog(prompt, default_value, title || 'Input Required', password || false);
+                    if (inputType === 'dropdown' && options) {
+                        result = await showMacOSDropdown(prompt, options, default_value, title || 'Select Option');
+                    } else {
+                        result = await showMacOSDialog(prompt, default_value, title || 'Input Required', inputType === 'password');
+                    }
                     break;
 
                 case 'win32': // Windows
-                    result = await showWindowsDialog(prompt, default_value, title || 'Input Required', password || false);
+                    if (inputType === 'dropdown' && options) {
+                        result = await showWindowsDropdown(prompt, options, default_value, title || 'Select Option');
+                    } else {
+                        result = await showWindowsDialog(prompt, default_value, title || 'Input Required', inputType === 'password');
+                    }
                     break;
 
                 case 'linux': // Linux
-                    result = await showLinuxDialog(prompt, default_value, title || 'Input Required', password || false);
+                    if (inputType === 'dropdown' && options) {
+                        result = await showLinuxDropdown(prompt, options, default_value, title || 'Select Option');
+                    } else {
+                        result = await showLinuxDialog(prompt, default_value, title || 'Input Required', inputType === 'password');
+                    }
                     break;
 
                 default:
@@ -273,5 +335,217 @@ async function showTerminalInput(prompt: string, defaultValue?: string, password
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
         throw new Error('Failed to read input from terminal');
+    }
+}
+
+/**
+ * Show dropdown dialog on macOS using AppleScript
+ */
+async function showMacOSDropdown(prompt: string, options: string[], defaultValue?: string, title?: string): Promise<string> {
+    const escapedPrompt = prompt
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/'/g, "'\\''")
+        .replace(/\n/g, ' ');
+    const escapedTitle = (title || 'Select Option')
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/'/g, "'\\''")
+        .replace(/\n/g, ' ');
+    
+    // Escape each option
+    const escapedOptions = options.map(opt => 
+        `"${opt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/'/g, "'\\''").replace(/\n/g, ' ')}"`
+    ).join(', ');
+    
+    const defaultOption = defaultValue || options[0];
+    const escapedDefault = defaultOption
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/'/g, "'\\''")
+        .replace(/\n/g, ' ');
+    
+    const script = `osascript -e 'tell application "System Events" to choose from list {${escapedOptions}} with prompt "${escapedPrompt}" with title "${escapedTitle}" default items {"${escapedDefault}"}' -e 'item 1 of result'`;
+    
+    try {
+        const {stdout} = await execAsync(script);
+        return stdout.trim();
+    } catch (error) {
+        if (error instanceof Error && error.message.includes('User canceled')) {
+            throw new Error('User cancelled the selection dialog');
+        }
+        throw error;
+    }
+}
+
+/**
+ * Show dropdown dialog on Windows using PowerShell
+ */
+async function showWindowsDropdown(prompt: string, options: string[], defaultValue?: string, title?: string): Promise<string> {
+    const escapedPrompt = prompt.replace(/'/g, "''");
+    const escapedTitle = (title || 'Select Option').replace(/'/g, "''");
+    
+    // Create PowerShell array of options
+    const optionsArray = options.map(opt => `'${opt.replace(/'/g, "''")}'`).join(',');
+    
+    const script = `
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = '${escapedTitle}'
+        $form.Size = New-Object System.Drawing.Size(350,200)
+        $form.StartPosition = 'CenterScreen'
+        
+        $label = New-Object System.Windows.Forms.Label
+        $label.Location = New-Object System.Drawing.Point(10,20)
+        $label.Size = New-Object System.Drawing.Size(320,40)
+        $label.Text = '${escapedPrompt}'
+        $form.Controls.Add($label)
+        
+        $comboBox = New-Object System.Windows.Forms.ComboBox
+        $comboBox.Location = New-Object System.Drawing.Point(10,70)
+        $comboBox.Size = New-Object System.Drawing.Size(320,20)
+        $comboBox.DropDownStyle = 'DropDownList'
+        @(${optionsArray}) | ForEach-Object { $comboBox.Items.Add($_) | Out-Null }
+        ${defaultValue ? `$comboBox.SelectedItem = '${defaultValue.replace(/'/g, "''")}'` : '$comboBox.SelectedIndex = 0'}
+        $form.Controls.Add($comboBox)
+        
+        $okButton = New-Object System.Windows.Forms.Button
+        $okButton.Location = New-Object System.Drawing.Point(175,120)
+        $okButton.Size = New-Object System.Drawing.Size(75,23)
+        $okButton.Text = 'OK'
+        $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.AcceptButton = $okButton
+        $form.Controls.Add($okButton)
+        
+        $cancelButton = New-Object System.Windows.Forms.Button
+        $cancelButton.Location = New-Object System.Drawing.Point(255,120)
+        $cancelButton.Size = New-Object System.Drawing.Size(75,23)
+        $cancelButton.Text = 'Cancel'
+        $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.CancelButton = $cancelButton
+        $form.Controls.Add($cancelButton)
+        
+        $form.Topmost = $true
+        $result = $form.ShowDialog()
+        
+        if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+            Write-Output $comboBox.SelectedItem
+        }
+    `;
+    
+    const {stdout} = await execAsync(`powershell -Command "${script.replace(/"/g, '\\"')}"`);
+    const result = stdout.trim();
+    
+    if (result === '') {
+        throw new Error('User cancelled the selection dialog');
+    }
+    
+    return result;
+}
+
+/**
+ * Show dropdown dialog on Linux using zenity or kdialog
+ */
+async function showLinuxDropdown(prompt: string, options: string[], defaultValue?: string, title?: string): Promise<string> {
+    // Try zenity first
+    try {
+        await execAsync('which zenity');
+        return await showZenityDropdown(prompt, options, defaultValue, title);
+    } catch {
+        // Try kdialog
+        try {
+            await execAsync('which kdialog');
+            return await showKdialogDropdown(prompt, options, defaultValue, title);
+        } catch {
+            // Fallback to terminal selection
+            return await showTerminalDropdown(prompt, options, defaultValue);
+        }
+    }
+}
+
+/**
+ * Show dropdown using zenity (GNOME)
+ */
+async function showZenityDropdown(prompt: string, options: string[], defaultValue?: string, title?: string): Promise<string> {
+    const args = [
+        'zenity',
+        '--list',
+        '--radiolist',
+        `--text="${prompt.replace(/"/g, '\\"')}"`,
+        `--title="${(title || 'Select Option').replace(/"/g, '\\"')}"`,
+        '--column=Select',
+        '--column=Option'
+    ];
+    
+    // Add options with selection state
+    options.forEach(opt => {
+        args.push(opt === defaultValue ? 'TRUE' : 'FALSE');
+        args.push(`"${opt.replace(/"/g, '\\"')}"`);
+    });
+    
+    try {
+        const {stdout} = await execAsync(args.join(' '));
+        return stdout.trim();
+    } catch (error) {
+        if (error instanceof Error && (error.message.includes('code 1') || error.message.includes('code 255'))) {
+            throw new Error('User cancelled the selection dialog');
+        }
+        throw error;
+    }
+}
+
+/**
+ * Show dropdown using kdialog (KDE)
+ */
+async function showKdialogDropdown(prompt: string, options: string[], defaultValue?: string, title?: string): Promise<string> {
+    const args = [
+        'kdialog',
+        '--combobox',
+        `"${prompt.replace(/"/g, '\\"')}"`,
+        ...options.map(opt => `"${opt.replace(/"/g, '\\"')}"`),
+        `--title "${(title || 'Select Option').replace(/"/g, '\\"')}"`,
+        defaultValue ? `--default "${defaultValue.replace(/"/g, '\\"')}"` : ''
+    ].filter(arg => arg !== '');
+    
+    try {
+        const {stdout} = await execAsync(args.join(' '));
+        return stdout.trim();
+    } catch (error) {
+        if (error instanceof Error && error.message.includes('code 1')) {
+            throw new Error('User cancelled the selection dialog');
+        }
+        throw error;
+    }
+}
+
+/**
+ * Fallback to terminal dropdown using select
+ */
+async function showTerminalDropdown(prompt: string, options: string[], defaultValue?: string): Promise<string> {
+    const optionsList = options.map((opt, idx) => `${idx + 1}) ${opt}`).join('\n');
+    const defaultIndex = defaultValue ? options.indexOf(defaultValue) + 1 : 1;
+    
+    const script = `
+        echo "${prompt.replace(/"/g, '\\"')}"
+        echo ""
+        ${optionsList.split('\n').map(line => `echo "${line}"`).join('\n')}
+        echo ""
+        read -p "Select option [${defaultIndex}]: " selection
+        selection=\${selection:-${defaultIndex}}
+        
+        case $selection in
+            ${options.map((opt, idx) => `${idx + 1}) echo "${opt.replace(/"/g, '\\"')}";;`).join('\n            ')}
+            *) echo "Invalid selection" >&2; exit 1;;
+        esac
+    `;
+    
+    try {
+        const {stdout} = await execAsync(script, {shell: '/bin/bash'});
+        const lines = stdout.trim().split('\n');
+        return lines[lines.length - 1];
+    } catch (error) {
+        throw new Error('Failed to read selection from terminal');
     }
 }

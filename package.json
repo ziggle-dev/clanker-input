@@ -1,7 +1,7 @@
 {
   "name": "@ziggler/input",
-  "version": "1.0.0",
-  "description": "Platform-specific input dialog for getting user input",
+  "version": "1.1.0",
+  "description": "Platform-specific input dialog for getting user input with support for text, password, and dropdown selection",
   "type": "module",
   "main": "src/index.ts",
   "author": {
