@@ -28,7 +28,7 @@ export default createTool()
         required: false,
         default: false
     })
-    .stringArrayArg('options', 'List of options for dropdown selection (optional)', {required: false})
+    .arrayArg('options', 'List of options for dropdown selection (optional)', {required: false})
     .stringArg('type', 'Type of input: text, password, or dropdown (optional)', {
         required: false,
         default: 'text'
